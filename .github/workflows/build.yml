@@ -1,0 +1,67 @@
+name: build
+
+on:
+  workflow_dispatch:        # 网页手动触发
+  push:
+    tags: [ 'v*' ]          # 推送 v 开头标签时自动构建并发 Release
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04     # 产物要求目标机 glibc >= 2.35 (Ubuntu 22.04+)
+          - os: windows-latest   # 产物: mpimg_tile_server.exe
+          - os: macos-latest     # Apple Silicon (macOS 14, arm64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: install deps
+        run: pip install PySide6 pyinstaller tifffile imagecodecs numpy
+
+      - name: build
+        run: >
+          pyinstaller --onefile --windowed --name mpimg_tile_server
+          --collect-all imagecodecs src/mpimg_tile_server.py
+
+      - name: hide dock icon (macOS)
+        if: runner.os == 'macOS'
+        run: plutil -insert LSUIElement -bool true
+             dist/mpimg_tile_server.app/Contents/Info.plist
+
+      - name: collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ -d dist/mpimg_tile_server.app ]; then
+            cp -R dist/mpimg_tile_server.app out/
+          else
+            find dist -maxdepth 1 -type f -exec cp {} out/ \;
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mpimg_tile_server-${{ matrix.os }}
+          path: out/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
